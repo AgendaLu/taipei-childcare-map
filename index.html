@@ -3,28 +3,47 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>臺北市準公共化托嬰中心｜可視化地圖</title>
+  <title>臺北市準公共化托嬰中心｜線上地圖</title>
+
+  <!-- Leaflet -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
     integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+
+  <!-- MarkerCluster (optional but recommended for 200+ points) -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+
+  <!-- PapaParse (CSV fallback) -->
+  <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
+
   <style>
     html, body { height: 100%; margin: 0; font-family: system-ui, -apple-system, "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif; }
-    .wrap { display: grid; grid-template-columns: 360px 1fr; height: 100%; }
-    .side { border-right: 1px solid #e5e7eb; padding: 12px; overflow: auto; }
+    .wrap { display: grid; grid-template-columns: 380px 1fr; height: 100%; }
+    .side { border-right: 1px solid #e5e7eb; padding: 12px; overflow: auto; background: #fff; }
     .map { height: 100%; }
-    .row { padding: 10px; border: 1px solid #e5e7eb; border-radius: 10px; margin: 10px 0; cursor: pointer; }
-    .row:hover { background: #f8fafc; }
-    .title { font-weight: 700; font-size: 14px; }
-    .meta { color: #475569; font-size: 12px; margin-top: 4px; line-height: 1.4; }
     .controls { display: grid; gap: 8px; }
-    input, select, button { padding: 10px; border-radius: 10px; border: 1px solid #cbd5e1; font-size: 14px; }
+    .titlebar { display:flex; align-items:baseline; justify-content:space-between; gap: 10px; }
+    .titlebar h1 { font-size: 16px; margin: 0; }
+    .titlebar .small { font-size: 12px; color: #64748b; }
+    input, select, button { padding: 10px; border-radius: 12px; border: 1px solid #cbd5e1; font-size: 14px; }
     button { cursor: pointer; background: #111827; color: white; border: 0; }
-    button:disabled { background: #6b7280; cursor: not-allowed; }
-    .small { font-size: 12px; color: #64748b; line-height: 1.4; }
-    .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+    button.secondary { background: #0f172a; }
+    button.ghost { background: #fff; color: #0f172a; border: 1px solid #cbd5e1; }
+    button:disabled { background: #6b7280; cursor: not-allowed; border: 0; color: #fff; }
+    .hint { font-size: 12px; color: #64748b; line-height: 1.5; }
+    .status { margin-top: 6px; font-size: 12px; color: #334155; }
+    .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
     .chip { font-size: 12px; padding: 3px 8px; border-radius: 999px; border: 1px solid #e5e7eb; color: #334155; background: #fff; }
-    .status { margin-top: 8px; font-size: 12px; color: #334155; }
+    .row { padding: 10px; border: 1px solid #e5e7eb; border-radius: 12px; margin: 10px 0; cursor: pointer; }
+    .row:hover { background: #f8fafc; }
+    .row .name { font-weight: 700; font-size: 14px; }
+    .row .meta { color: #475569; font-size: 12px; margin-top: 4px; line-height: 1.4; }
+    .row .dist { color: #0f172a; font-weight: 600; }
+    .divider { height: 1px; background: #e5e7eb; margin: 10px 0; }
+    .rowbtns { display:flex; gap: 8px; }
+    .rowbtns > * { flex: 1; }
     @media (max-width: 900px) {
-      .wrap { grid-template-columns: 1fr; grid-template-rows: 44vh 1fr; }
+      .wrap { grid-template-columns: 1fr; grid-template-rows: 46vh 1fr; }
       .side { border-right: 0; border-bottom: 1px solid #e5e7eb; }
     }
   </style>
@@ -32,6 +51,13 @@
 <body>
 <div class="wrap">
   <div class="side">
+    <div class="titlebar">
+      <h1>臺北市準公共化托嬰中心</h1>
+      <div class="small">GitHub Pages</div>
+    </div>
+
+    <div class="divider"></div>
+
     <div class="controls">
       <input id="q" placeholder="搜尋：名稱 / 地址 / 電話" />
       <select id="district">
@@ -40,141 +66,282 @@
       <select id="evaluation">
         <option value="">全部評鑑</option>
       </select>
-      <button id="batch">批次地理編碼（每秒 1 筆，建議少量使用）</button>
-      <div class="small">
-        說明：原始資料只有「地址」，本頁會在你點選清單項目（或批次）時，向 OpenStreetMap 的 Nominatim 服務查詢座標並在地圖上標點。查到的座標會快取在瀏覽器（localStorage），下次開啟更快。
+
+      <div class="rowbtns">
+        <button id="locate" class="secondary">定位我（附近排序/篩選）</button>
+        <button id="clearLocate" class="ghost" disabled>清除定位</button>
+      </div>
+
+      <select id="radius">
+        <option value="">距離篩選：不限</option>
+        <option value="0.5">0.5 公里內</option>
+        <option value="1">1 公里內</option>
+        <option value="2">2 公里內</option>
+        <option value="5">5 公里內</option>
+        <option value="10">10 公里內</option>
+      </select>
+
+      <select id="sort">
+        <option value="name">排序：名稱</option>
+        <option value="district">排序：行政區</option>
+        <option value="distance" disabled>排序：距離（需定位）</option>
+      </select>
+
+      <button id="download">下載目前篩選結果（JSON）</button>
+
+      <div class="hint">
+        讀取資料優先順序：<code>./data.json</code>（最快）→ 兩份 CSV Join（<code>./臺北市準公共化托嬰中心.csv</code> + <code>./XY Data.csv</code>）→ <code>./data.csv</code>。<br>
+        你的 <code>XY Data.csv</code> 目前看起來是「經度在 lat、緯度在 lng」；本頁會自動偵測並修正（lat&gt;90 會交換）。<br>
+        建議把檔名改成英文（例如 <code>centers.csv</code>, <code>xy.csv</code>）可以避免路徑編碼問題（尤其有空白或中文時）。
       </div>
       <div id="status" class="status"></div>
     </div>
+
     <div class="chips" id="chips"></div>
     <div id="list"></div>
   </div>
+
   <div id="map" class="map"></div>
 </div>
 
+<!-- Leaflet JS -->
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
   integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-<script>
-const DATA = [{"name": "臺北市私立小哈利托嬰中心", "district": "中正區", "address": "臺北市中正區南昌路1段145號2樓", "phone": "(02)33933104", "approved": "32", "current": "32", "evaluation": "109-甲"}, {"name": "臺北市私立宥緣托嬰中心", "district": "中正區", "address": "臺北市中正區杭州南路1段131巷5號2樓", "phone": "(02)33225686", "approved": "30", "current": "27", "evaluation": "111-乙"}, {"name": "臺北市私立宥宜托嬰中心", "district": "中正區", "address": "臺北市中正區杭州南路1段131巷3號2樓", "phone": "(02)23587111", "approved": "30", "current": "28", "evaluation": "111-乙"}, {"name": "立法院附設臺北市私立員工子女托嬰中心(委託社團法人新北市嬰幼兒托育協會經營管理)", "district": "中正區", "address": "臺北市中正區青島東路1-3號1樓", "phone": "(02)23588542", "approved": "45", "current": "45", "evaluation": "111-優"}, {"name": "臺北市私立小天心東門托嬰中心", "district": "中正區", "address": "臺北市中正區新生南路1段170巷14之11號1樓", "phone": "(02)23435082", "approved": "27", "current": "27", "evaluation": "111-優"}, {"name": "臺北市私立小天心晴晴托嬰中心", "district": "中正區", "address": "臺北市中正區師大路176號1樓", "phone": "(02)23675580", "approved": "33", "current": "33", "evaluation": "110-甲"}, {"name": "臺北市私立萌芽托嬰中心", "district": "中正區", "address": "臺北市中正區廈門街10號1樓", "phone": "(02)23685881", "approved": "20", "current": "20", "evaluation": "111-乙"}, {"name": "臺北市私立樂寶托嬰中心", "district": "中正區", "address": "臺北市中正區林森南路101號及101號之一1樓", "phone": "(02)23581556", "approved": "35", "current": "18", "evaluation": ""}, {"name": "臺北市私立小天心壹壹托嬰中心", "district": "中正區", "address": "臺北市中正區晉江街115號", "phone": "(02)23650251", "approved": "34", "current": "12", "evaluation": ""}, {"name": "臺北市政府社會局委託社團法人台北市幼兒園協會辦理臺北市中正托嬰中心", "district": "中正區", "address": "臺北市中正區詔安街29號1樓(螢橋國小新大樓)", "phone": "(02)23017171", "approved": "40", "current": "40", "evaluation": "109-優"}, {"name": "臺北市政府社會局委託社團法人新北市國際兒童教育協會辦理臺北市新生托嬰中心", "district": "中正區", "address": "臺北市中正區新生南路1段54巷5弄2號1、2樓", "phone": "(02)23517197", "approved": "35", "current": "35", "evaluation": "109-甲"}, {"name": "臺北市政府社會局委託社團法人新北市春陽關懷協會經營管理臺北市南海社區公共托育家園", "district": "中正區", "address": "臺北市中正區延平南路207之1號1樓", "phone": "(02)23113689", "approved": "12", "current": "12", "evaluation": "110-甲"}, {"name": "臺北市私立詠荺托嬰中心", "district": "大同區", "address": "臺北市大同區重慶北路3段24號2樓", "phone": "(02)25961237", "approved": "20", "current": "20", "evaluation": "109-乙"}, {"name": "臺北市私立海王子托嬰中心", "district": "大同區", "address": "臺北市大同區延平北路2段278號3樓、3樓之3", "phone": "(02)25531988", "approved": "40", "current": "32", "evaluation": "111-甲"}, {"name": "臺北市私立喜樂大同托嬰中心", "district": "大同區", "address": "臺北市大同區重慶北路3段252巷2號2樓", "phone": "(02)25850805", "approved": "22", "current": "22", "evaluation": "111-乙"}, {"name": "臺北市私立小育龍延平托嬰中心", "district": "大同區", "address": "臺北市大同區延平北路2段242號2樓之1", "phone": "(02)25573488", "approved": "39", "current": "39", "evaluation": ""}, {"name": "臺北市政府社會局委託社團法人吾幼吾家教保協會辦理臺北市大同托嬰中心", "district": "大同區", "address": "臺北市大同區重慶北路3段120巷2號3樓", "phone": "(02)25989926", "approved": "45", "current": "45", "evaluation": "111-優"}, {"name": "臺北市政府社會局委託社團法人吾幼吾家教保協會經營管理臺北市明倫托嬰中心", "district": "大同區", "address": "臺北市大同區承德路3段285之8號", "phone": "(02)25854808", "approved": "40", "current": "40", "evaluation": ""}, {"name": "臺北市政府社會局委託臺北市嬰幼兒托育協會經營管理臺北市大龍社區公共托育家園", "district": "大同區", "address": "臺北市大同區哈密街47號(大龍國小)", "phone": "(02)25950892", "approved": "12", "current": "12", "evaluation": "111-優"}, {"name": "臺北市政府社會局委託臺北市托育發展協會經營管理臺北市忠孝社區公共托育家園", "district": "大同區", "address": "臺北市大同區西寧北路32號1樓(忠孝國中)", "phone": "(02)25527337", "approved": "12", "current": "12", "evaluation": "111-優"}, {"name": "臺北市政府社會局委託社團法人中華童心幸福關懷協會經營管理臺北市永樂社區公共托育家園", "district": "大同區", "address": "臺北市大同區延平北路2段266號1樓(永樂國小)", "phone": "(02)25530711", "approved": "12", "current": "12", "evaluation": "111-甲"}, {"name": "臺北市私立漢妮托嬰中心", "district": "中山區", "address": "臺北市中山區明水路397巷7弄9號1樓", "phone": "(02)85092613", "approved": "20", "current": "19", "evaluation": "110-甲"}, {"name": "臺北市私立卡兒堡托嬰中心 (原名稱:宜朵園蒙特梭利托嬰中心)", "district": "中山區", "address": "臺北市中山區基湖路149號1樓", "phone": "(02)85026776", "approved": "35", "current": "30", "evaluation": "111-乙"}, {"name": "臺北市私立日光貝比托嬰中心", "district": "中山區", "address": "臺北市中山區中山北路2段116巷9號2樓", "phone": "(02)25717858", "approved": "40", "current": "18", "evaluation": "109-乙"}, {"name": "臺北市私立笙愛托嬰中心", "district": "中山區", "address": "臺北市中山區松江路46巷9之1號2樓", "phone": "(02)25812922", "approved": "18", "current": "18", "evaluation": "111-乙"}, {"name": "臺北市私立韋斯登托嬰中心", "district": "中山區", "address": "臺北市中山區合江街105巷16號1樓", "phone": "(02)25091368", "approved": "19", "current": "19", "evaluation": "110-乙"}, {"name": "臺北市私立布萊茲托嬰中心", "district": "中山區", "address": "臺北市中山區合江街100巷11號1樓", "phone": "(02)25081708", "approved": "21", "current": "20", "evaluation": "111-乙"}, {"name": "臺北市私立龍江媽咪托嬰中心", "district": "中山區", "address": "臺北市中山區龍江路397巷10號1樓", "phone": "(02)25051725", "approved": "18", "current": "18", "evaluation": "111-乙"}, {"name": "臺北市私立愛寶貝大直園托嬰中心", "district": "中山區", "address": "臺北市中山區明水路443號1樓", "phone": "(02)25336823", "approved": "20", "current": "17", "evaluation": "111-甲"}, {"name": "臺北市私立大愛托嬰中心", "district": "中山區", "address": "臺北市中山區民生東路3段9巷5號及7號", "phone": "(02)25065757", "approved": "40", "current": "40", "evaluation": "110-乙"}, {"name": "臺北市私立寶貝托嬰中心", "district": "中山區", "address": "臺北市中山區民族東路512巷23號1樓", "phone": "(02)25090007", "approved": "20", "current": "20", "evaluation": "110-甲"}, {"name": "臺北市私立愛寶貝明水園托嬰中心", "district": "中山區", "address": "臺北市中山區明水路457號1樓", "phone": "(02)25324766", "approved": "26", "current": "26", "evaluation": "111-甲"}, {"name": "臺北市私立健寶兒長安托嬰中心", "district": "中山區", "address": "臺北市中山區龍江路23號2樓", "phone": "(02)27116825", "approved": "63", "current": "54", "evaluation": ""}, {"name": "臺北市私立小庭園托嬰中心", "district": "中山區", "address": "臺北市中山區遼寧街63巷30號2樓", "phone": "(02)27510630", "approved": "23", "current": "21", "evaluation": ""}, {"name": "臺北市私立健寶兒英琦托嬰中心", "district": "中山區", "address": "臺北市中山區龍江路40號2樓", "phone": "(02)27111148", "approved": "38", "current": "14", "evaluation": ""}, {"name": "臺北市私立詠欣托嬰中心", "district": "中山區", "address": "臺北市中山區建國北路2段186巷7號、9號1樓", "phone": "(02)25178218", "approved": "39", "current": "5", "evaluation": ""}, {"name": "台灣基督長老教會馬偕醫療財團法人馬偕紀念醫院附設臺北市私立馬偕員工子女托嬰中心", "district": "中山區", "address": "臺北市中山區中山北路2段106之2號2樓", "phone": "(02)25424203", "approved": "34", "current": "20", "evaluation": ""}, {"name": "臺北市政府社會局委託台北市教保人員協會辦理臺北市中山托嬰中心", "district": "中山區", "address": "臺北市中山區林森北路511號1樓(新興國中教學大樓)", "phone": "(02)25214118", "approved": "40", "current": "40", "evaluation": "111-優"}, {"name": "臺北市政府社會局委託台北市教保人員協會經營管理臺北市吉林社區公共托育家園", "district": "中山區", "address": "臺北市中山區長春路116號2樓(吉林國小－臺北市家庭教育中心)", "phone": "(02)25114698", "approved": "12", "current": "12", "evaluation": "110-優"}, {"name": "臺北市政府社會局委託台北市教保人員協會經營管理臺北市濱中社區公共托育家園", "district": "中山區", "address": "臺北市中山區樂群二路262號1樓(濱江國中文樓)", "phone": "(02)85015418", "approved": "12", "current": "12", "evaluation": "111-優"}, {"name": "臺北市政府社會局委託社團法人中華婦幼健康促進發展協會經營管理臺北市北安社區公共托育家園", "district": "中山區", "address": "臺北市中山區明水路325號1樓(北安國中忠孝樓)", "phone": "(02)25334390", "approved": "12", "current": "12", "evaluation": "111-甲"}, {"name": "臺北市政府社會局委託社團法人中華童心幸福關懷協會經營管理臺北市大直社區公共托育家園", "district": "中山區", "address": "臺北市中山區大直街2號1樓(大直國小自愛樓)", "phone": "(02)25330158", "approved": "12", "current": "12", "evaluation": "111-甲"}, {"name": "臺北市政府社會局委託社團法人中華婦幼健康促進發展協會經營管理臺北市濱江社區公共托育家園", "district": "中山區", "address": "臺北市中山區樂群二路266巷99號1樓(濱江國小幼兒園區)", "phone": "(02)85012413", "approved": "12", "current": "12", "evaluation": "109-甲"}, {"name": "臺北市私立豐村托嬰中心", "district": "松山區", "address": "臺北市松山區光復南路13巷43號1樓", "phone": "(02)27687959", "approved": "23", "current": "22", "evaluation": "110-乙"}, {"name": "臺北市私立多多托嬰中心", "district": "松山區", "address": "臺北市松山區八德路3段12巷51弄19號1樓", "phone": "(02)25791370", "approved": "32", "current": "32", "evaluation": "109-甲"}, {"name": "臺北市私立凱思托嬰中心", "district": "松山區", "address": "臺北市松山區光復北路100巷8號1樓", "phone": "(02)25791350", "approved": "30", "current": "27", "evaluation": "109-乙"}, {"name": "臺北市私立哈寶寶托嬰中心", "district": "松山區", "address": "臺北市松山區民生東路5段36巷4弄41號1樓", "phone": "(02)37651389", "approved": "20", "current": "20", "evaluation": "110-甲"}, {"name": "臺北市私立采禾托嬰中心", "district": "松山區", "address": "臺北市松山區八德路3段81號2樓之1", "phone": "(02)25771163", "approved": "40", "current": "40", "evaluation": "111-甲"}, {"name": "臺北市私立健寶兒托嬰中心", "district": "松山區", "address": "臺北市松山區敦化北路222巷15號1樓", "phone": "(02)27123455", "approved": "24", "current": "2", "evaluation": "111-乙"}, {"name": "臺北市私立哈寶貝托嬰中心", "district": "松山區", "address": "臺北市松山區民生東路5段39之2號1樓", "phone": "(02)27565859", "approved": "22", "current": "22", "evaluation": "111-甲"}, {"name": "臺北市私立悅福托嬰中心", "district": "松山區", "address": "臺北市松山區南京東路4段95號2樓", "phone": "(02)25472977", "approved": "36", "current": "21", "evaluation": "109-乙"}, {"name": "臺北市私立悅和托嬰中心", "district": "松山區", "address": "臺北市松山區南京東路4段93號2樓", "phone": "(02)25473118", "approved": "22", "current": "14", "evaluation": "110-乙"}, {"name": "臺北市私立天使寶貝蒙特梭利托嬰中心", "district": "松山區", "address": "臺北市松山區敦化北路145巷71號1樓", "phone": "(02)27126655", "approved": "26", "current": "26", "evaluation": "110-甲"}, {"name": "臺北市私立天愛托嬰中心", "district": "松山區", "address": "臺北市松山區三民路9號2樓之5", "phone": "(02)87875598", "approved": "32", "current": "29", "evaluation": "111-甲"}, {"name": "臺北市私立健寶兒敦北托嬰中心", "district": "松山區", "address": "臺北市松山區民權東路3段106巷3弄55之1號", "phone": "(02)25466699", "approved": "30", "current": "23", "evaluation": "111-甲"}, {"name": "臺北市私立健寶兒吉祥托嬰中心", "district": "松山區", "address": "臺北市松山區八德路4段111號3樓", "phone": "(02)27672855", "approved": "60", "current": "28", "evaluation": ""}, {"name": "臺北市私立牧星托嬰中心", "district": "松山區", "address": "臺北市松山區復興北路427巷23號1樓", "phone": "(02)25140228", "approved": "25", "current": "25", "evaluation": ""}, {"name": "臺北市私立玥康托嬰中心", "district": "松山區", "address": "臺北市松山區民生東路80巷1弄11號1樓", "phone": "(02)25467888", "approved": "26", "current": "8", "evaluation": ""}, {"name": "臺北市政府社會局委託經國管理暨健康學院辦理臺北市松山托嬰中心", "district": "松山區", "address": "臺北市松山區三民路5號1樓(西松國小東陽樓)", "phone": "(02)37651775", "approved": "40", "current": "40", "evaluation": "109-優"}, {"name": "臺北市政府社會局委託財團法人中華民國唐氏症基金會辦理臺北市健康托嬰中心", "district": "松山區", "address": "臺北市松山區健康路323號1樓(健康公宅2區)", "phone": "(02)27618321", "approved": "45", "current": "45", "evaluation": "109-甲"}, {"name": "臺北市政府社會局委託台北市教保人員協會經營管理臺北市松民社區公共托育家園", "district": "松山區", "address": "臺北市松山區民生東路5段163-1號2樓", "phone": "(02)27652003", "approved": "12", "current": "12", "evaluation": "109-優"}, {"name": "臺北市政府社會局委託臺北市嬰幼兒托育協會經營管理臺北市松山社區公共托育家園", "district": "松山區", "address": "臺北市松山區八德路4段746號1樓(松山國小南棟)", "phone": "(02)27480228", "approved": "12", "current": "12", "evaluation": ""}, {"name": "臺北市私立吉事達康博喜托嬰中心", "district": "大安區", "address": "臺北市大安區敦化南路2段200巷20號1樓及22號1樓", "phone": "(02)27381616", "approved": "40", "current": "28", "evaluation": "110-甲"}, {"name": "臺北市私立萌語托嬰中心", "district": "大安區", "address": "臺北市大安區安和路2段70號2樓之5", "phone": "(02)27030888", "approved": "28", "current": "28", "evaluation": "111-優"}, {"name": "臺北市私立小天心托嬰中心", "district": "大安區", "address": "臺北市大安區師大路86巷4號1樓", "phone": "(02)23678146", "approved": "33", "current": "33", "evaluation": "109-甲"}, {"name": "臺北市私立以愛托嬰中心", "district": "大安區", "address": "臺北市大安區和平東路1段183巷3弄2之1號1樓", "phone": "(02)23910805", "approved": "28", "current": "19", "evaluation": "111-甲"}, {"name": "臺北市私立橘子樹寶貝托嬰中心", "district": "大安區", "address": "臺北市大安區瑞安街155巷2號1樓", "phone": "(02)27048288", "approved": "35", "current": "35", "evaluation": "110-乙"}, {"name": "臺北市私立采侑托嬰中心", "district": "大安區", "address": "臺北市大安區羅斯福路3段333巷9號2樓及11號2樓", "phone": "(02)23681237", "approved": "40", "current": "28", "evaluation": "111-甲"}, {"name": "臺北市私立翻轉學堂托嬰中心", "district": "大安區", "address": "臺北市大安區四維路160巷14號1樓", "phone": "(02)27045089", "approved": "25", "current": "25", "evaluation": "111-甲"}, {"name": "臺北市私立天心大安托嬰中心", "district": "大安區", "address": "臺北市大安區新生南路3段86巷23、25號1樓", "phone": "(02)23635261", "approved": "39", "current": "39", "evaluation": "111-甲"}, {"name": "臺北市私立萌語大安托嬰中心", "district": "大安區", "address": "臺北市大安區安和路1段112巷22號", "phone": "(02)27009000", "approved": "40", "current": "39", "evaluation": "109-甲"}, {"name": "臺北市私立小樹蒙特梭利托嬰中心", "district": "大安區", "address": "臺北市大安區樂業街188號1樓", "phone": "(02)27320909", "approved": "24", "current": "24", "evaluation": ""}, {"name": "臺北市私立廣蕎托嬰中心", "district": "大安區", "address": "臺北市大安區通化街176巷8號2樓", "phone": "(02)23778185", "approved": "25", "current": "25", "evaluation": ""}, {"name": "臺北市政府社會局委託社團法人新北市國際兒童教育協會辦理臺北市大安托嬰中心", "district": "大安區", "address": "臺北市大安區羅斯福路4段21號1樓(臺北市銘傳國小向陽樓)", "phone": "(02)23656565", "approved": "40", "current": "40", "evaluation": "109-優"}, {"name": "臺北市政府社會局委託台北市兒童托育協會經營管理臺北市成功社區公共托育家園", "district": "大安區", "address": "臺北市大安區四維路198巷38弄10號(大安區成功國宅警察局駐點廳舍)", "phone": "(02)27070857", "approved": "12", "current": "12", "evaluation": "111-優"}, {"name": "臺北市政府社會局委託社團法人中華婦幼健康促進發展協會經營管理臺北市大安社區公共托育家園", "district": "大安區", "address": "臺北市大安區臥龍街129號2樓(大安國小活動中心)", "phone": "(02)27374956", "approved": "12", "current": "12", "evaluation": "109-甲"}, {"name": "臺北市政府社會局委託台北市教保人員協會經營管理臺北市族中社區公共托育家園", "district": "大安區", "address": "臺北市大安區羅斯福路4段113巷13號1樓(民族國中後棟)", "phone": "(02)23770039", "approved": "12", "current": "12", "evaluation": "109-優"}, {"name": "臺北市政府社會局委託財團法人海棠文教基金會經營管理臺北市懷中社區公共托育家園", "district": "大安區", "address": "臺北市大安區忠孝東路3段248巷30號1樓(懷生國中懷生樓)", "phone": "(02)27780378", "approved": "12", "current": "12", "evaluation": "109-甲"}, {"name": "臺北市私立小育龍托嬰中心", "district": "萬華區", "address": "臺北市萬華區萬大路61號2樓", "phone": "(02)23089200", "approved": "21", "current": "20", "evaluation": "111-甲"}, {"name": "臺北市私立安馨托嬰中心", "district": "萬華區", "address": "臺北市萬華區中華路2段364巷5號1樓", "phone": "(02)23391661", "approved": "22", "current": "22", "evaluation": "109-甲"}, {"name": "臺北市私立小育龍莒光托嬰中心", "district": "萬華區", "address": "臺北市萬華區莒光路175號2樓", "phone": "(02)23043118", "approved": "19", "current": "19", "evaluation": "111-甲"}, {"name": "臺北市私立瑞吉歐托嬰中心", "district": "萬華區", "address": "臺北市萬華區中華路2段364巷17號1樓", "phone": "(02)23017002", "approved": "20", "current": "20", "evaluation": "111-甲"}, {"name": "臺北市私立安馨寶貝托嬰中心", "district": "萬華區", "address": "臺北市萬華區中華路2段364巷13號1樓", "phone": "(02)23097027", "approved": "28", "current": "28", "evaluation": "111-甲"}, {"name": "臺北市私立小時候托嬰中心", "district": "萬華區", "address": "臺北市萬華區萬大路423巷46號1樓", "phone": "(02)23073636", "approved": "24", "current": "24", "evaluation": ""}, {"name": "臺北市政府社會局委託社團法人臺北市嬰幼兒適性發展協會辦理臺北市萬華托嬰中心", "district": "萬華區", "address": "臺北市萬華區成都路98號1樓(西門國小和平樓)", "phone": "(02)23889066", "approved": "40", "current": "40", "evaluation": "110-優"}, {"name": "臺北市政府社會局委託社團法人新北市春陽關懷協會經營管理臺北市萬大托嬰中心", "district": "萬華區", "address": "臺北市萬華區西藏路201號2樓(萬華國中勵學樓2樓)", "phone": "(02)23375687", "approved": "45", "current": "45", "evaluation": "111-優"}, {"name": "臺北市政府社會局委託中華民國蒙特梭利教師協會經營管理臺北市雙園社區公共托育家園", "district": "萬華區", "address": "臺北市萬華區興義街2號1樓(雙園國中D棟)", "phone": "(02)23052362", "approved": "12", "current": "12", "evaluation": "111-甲"}, {"name": "臺北市政府社會局委託社團法人新北市中華國際嬰幼兒發展學會經營管理臺北市日善社區公共托育家園", "district": "萬華區", "address": "臺北市萬華區東園街19-1號1樓", "phone": "(02)23038805", "approved": "12", "current": "12", "evaluation": "110-乙"}, {"name": "臺北市政府社會局委託社團法人新北市春陽關懷協會經營管理臺北市龍山社區公共托育家園", "district": "萬華區", "address": "臺北市萬華區和平西路3段235號3樓(龍山國小仁愛樓)", "phone": "(02)23083199", "approved": "12", "current": "12", "evaluation": "111-甲"}, {"name": "臺北市政府社會局委託社團法人新北市中華國際嬰幼兒發展學會經營管理臺北市東園社區公共托育家園", "district": "萬華區", "address": "臺北市萬華區東園街195號1樓(東園國小內)", "phone": "(02)23016925", "approved": "12", "current": "12", "evaluation": "111-優"}, {"name": "臺北市政府社會局委託社團法人新北市中華國際嬰幼兒發展學會經營管理臺北市西園社區公共托育家園", "district": "萬華區", "address": "臺北市萬華區東園街73巷65號2樓(西園國小內)", "phone": "(02)23391231", "approved": "12", "current": "12", "evaluation": "111-甲"}, {"name": "臺北市政府社會局委託社團法人中華兆陽文教發展協會經營管理臺北市亭中社區公共托育家園", "district": "萬華區", "address": "臺北市萬華區中華路2段606巷3號2樓(古亭國中第二校區)", "phone": "(02)23019738", "approved": "12", "current": "12", "evaluation": "109-甲"}, {"name": "臺北市政府社會局委託社團法人新北市國際兒童教育協會經營管理臺北市青年托嬰中心", "district": "萬華區", "address": "臺北市萬華區日祥里青年路188之1號", "phone": "(02)23011536", "approved": "45", "current": "45", "evaluation": "110-優"}, {"name": "臺北市政府社會局委託財團法人海棠文教基金會經營管理臺北市老松社區公共托育家園", "district": "萬華區", "address": "臺北市萬華區桂林路64號1樓(老松國小南棟)", "phone": "(02)23028488", "approved": "12", "current": "12", "evaluation": "110-優"}, {"name": "臺北市私立薇薇安娃娃國托嬰中心", "district": "信義區", "address": "臺北市信義區忠孝東路5段236巷3弄29號2樓及2樓之1", "phone": "(02)23459330", "approved": "24", "current": "24", "evaluation": "111-乙"}, {"name": "臺北市私立薇薇安娃娃國信義園托嬰中心", "district": "信義區", "address": "臺北市信義區忠孝東路5段236巷37弄33號1樓", "phone": "(02)87801438", "approved": "20", "current": "19", "evaluation": "110-乙"}, {"name": "臺北市私立信義小太陽托嬰中心", "district": "信義區", "address": "臺北市信義區中坡南路98巷2號1樓", "phone": "(02)27277726", "approved": "20", "current": "20", "evaluation": "111-乙"}, {"name": "臺北市私立薇薇安娃娃國興雅園托嬰中心", "district": "信義區", "address": "臺北市信義區松德路180巷9號", "phone": "(02)87869037", "approved": "24", "current": "23", "evaluation": "110-乙"}, {"name": "臺北市私立薇薇安娃娃國松德園托嬰中心", "district": "信義區", "address": "臺北市信義區松德路180巷11號", "phone": "(02)87869036", "approved": "28", "current": "27", "evaluation": "110-乙"}, {"name": "臺北市私立柚子樹托嬰中心", "district": "信義區", "address": "臺北市信義區信義路6段36號1樓", "phone": "(02)66050926", "approved": "20", "current": "20", "evaluation": "111-乙"}, {"name": "臺北市政府附設臺北市私立市政大樓員工子女社區公共托育家園", "district": "信義區", "address": "臺北市信義區市府路1號2樓(臺北市政府市政大樓南區)", "phone": "(02)27208889", "approved": "12", "current": "12", "evaluation": "110-甲"}, {"name": "臺北市政府社會局委託社團法人台北市幼兒園協會辦理臺北市信義托嬰中心", "district": "信義區", "address": "臺北市信義區基隆路2段99號1樓(三興國小和平樓)", "phone": "(02)23783232", "approved": "40", "current": "40", "evaluation": "109-優"}, {"name": "臺北市政府社會局委託社團法人臺北市保母成長促進會經營管理臺北市吳興社區公共托育家園", "district": "信義區", "address": "臺北市信義區松仁路226號2樓(吳興國小信義樓)", "phone": "(02)27580675", "approved": "12", "current": "12", "evaluation": "111-乙"}, {"name": "臺北市政府社會局委託臺北市托育發展協會經營管理臺北市興雅社區公共托育家園", "district": "信義區", "address": "臺北市信義區基隆路1段83巷9號2樓(興雅國小和平樓)", "phone": "(02)27495657", "approved": "12", "current": "12", "evaluation": "111-優"}, {"name": "臺北市私立怡寶優質托嬰中心", "district": "士林區", "address": "臺北市士林區文林路740巷9弄24號1樓", "phone": "(02)28359188", "approved": "22", "current": "22", "evaluation": "109-優"}, {"name": "臺北市私立怡寶托嬰中心", "district": "士林區", "address": "臺北市士林區中山北路5段852號1樓", "phone": "(02)28361115", "approved": "24", "current": "24", "evaluation": "109-甲"}, {"name": "臺北市私立怡寶資優托嬰中心", "district": "士林區", "address": "臺北巿士林區文林路740巷9弄2號1樓", "phone": "(02)28359188", "approved": "22", "current": "22", "evaluation": "111-優"}, {"name": "臺北市私立好來托嬰中心", "district": "士林區", "address": "臺北市士林區忠誠路2段166巷31號1樓至2樓", "phone": "(02)28718698", "approved": "40", "current": "29", "evaluation": "111-乙"}, {"name": "臺北市私立春田托嬰中心", "district": "士林區", "address": "臺北市士林區磺溪街88巷6號1樓", "phone": "(02)28366515", "approved": "22", "current": "18", "evaluation": "111-甲"}, {"name": "臺北市私立萌語天母托嬰中心", "district": "士林區", "address": "臺北市士林區中山北路6段405巷70號1樓", "phone": "(02)28718988", "approved": "31", "current": "30", "evaluation": "111-優"}, {"name": "臺北市私立春田天母托嬰中心", "district": "士林區", "address": "臺北市士林區忠誠路2段32巷9號1樓", "phone": "(02)28348523", "approved": "34", "current": "30", "evaluation": "109-乙"}, {"name": "臺北市私立怡寶質優托嬰中心", "district": "士林區", "address": "臺北市士林區前港街88號1樓", "phone": "(02)28810088", "approved": "23", "current": "21", "evaluation": "110-優"}, {"name": "臺北市私立長藤托嬰中心", "district": "士林區", "address": "臺北市士林區葫蘆街140號1樓", "phone": "(02)28136942", "approved": "20", "current": "20", "evaluation": "110-甲"}, {"name": "臺北市私立維薆托嬰中心", "district": "士林區", "address": "臺北市士林區忠誠路2段70巷13弄1號1樓", "phone": "(02)28313391", "approved": "25", "current": "24", "evaluation": "110-甲"}, {"name": "臺北市私立好來天母托嬰中心", "district": "士林區", "address": "臺北市士林區士東路244號1樓", "phone": "(02)28718697", "approved": "27", "current": "24", "evaluation": "110-甲"}, {"name": "臺北市私立孩子國萌寶托嬰中心", "district": "士林區", "address": "臺北市士林區承德路4段187號1樓", "phone": "(02)28881541", "approved": "33", "current": "31", "evaluation": "111-甲"}, {"name": "臺北市私立雨聲托嬰中心(社團法人新北市嬰幼兒托育協會辦理)", "district": "士林區", "address": "臺北市士林區雨聲街105號1樓(聯醫陽明院區宿舍大樓西側1樓)", "phone": "(02)28315601", "approved": "30", "current": "29", "evaluation": "111-優"}, {"name": "臺北市私立幼天才托嬰中心", "district": "士林區", "address": "臺北市士林區華齡街180號及182號1樓", "phone": "(02)88611580", "approved": "40", "current": "38", "evaluation": "111-優"}, {"name": "臺北市私立怡寶士林官邸托嬰中心", "district": "士林區", "address": "臺北市士林區中山北路5段520號1樓", "phone": "(02)28883520", "approved": "79", "current": "77", "evaluation": "110-甲"}, {"name": "臺北市私立長藤幼苗托嬰中心", "district": "士林區", "address": "臺北市士林區中正路655巷6號及8號", "phone": "(02)28162958", "approved": "23", "current": "23", "evaluation": "111-甲"}, {"name": "臺北市私立蘭瑛托嬰中心", "district": "士林區", "address": "臺北市士林區德行東路74巷22號1樓", "phone": "(02)28333030", "approved": "30", "current": "29", "evaluation": ""}, {"name": "臺北市私立蘇培兒托嬰中心", "district": "士林區", "address": "臺北市士林區社中街422號1樓及2樓", "phone": "(02)28116565", "approved": "34", "current": "30", "evaluation": ""}, {"name": "臺北市私立萌薆托嬰中心", "district": "士林區", "address": "臺北巿士林區士東路120巷22弄1號", "phone": "(02)28360083", "approved": "24", "current": "24", "evaluation": ""}, {"name": "臺北市私立小熊搖籃天母一館托嬰中心", "district": "士林區", "address": "臺北市士林區天母西路48號1、2樓", "phone": "(02)28764468", "approved": "35", "current": "34", "evaluation": ""}, {"name": "臺北市私立怡寶美好時光托嬰中心", "district": "士林區", "address": "臺北市士林區文林路740巷11號1樓", "phone": "(02)28360711", "approved": "19", "current": "19", "evaluation": ""}, {"name": "臺北市政府社會局委託財團法人靖娟兒童安全文教基金會辦理臺北市士林托嬰中心", "district": "士林區", "address": "臺北市士林區基河路130號1樓", "phone": "(02)28836242", "approved": "45", "current": "45", "evaluation": "110-優"}, {"name": "臺北市政府社會局委託財團法人彭婉如文教基金會經營管理臺北市芝山社區公共托育家園", "district": "士林區", "address": "臺北市士林區德行東路285號3樓(芝山國小忠孝樓)", "phone": "(02)28385506", "approved": "12", "current": "12", "evaluation": "110-甲"}, {"name": "臺北市政府社會局委託社團法人台灣公共托育協會經營管理臺北市葫蘆社區公共托育家園", "district": "士林區", "address": "臺北市士林區環河北路3段95號2樓(葫蘆國小光復樓)", "phone": "(02)28105878", "approved": "12", "current": "12", "evaluation": "111-甲"}, {"name": "臺北市政府社會局委託新北市嬰幼兒托育發展促進會經營管理臺北市富安社區公共托育家園", "district": "士林區", "address": "臺北市士林區延平北路8段135號2樓(富安國小內)", "phone": "(02)28117668", "approved": "12", "current": "12", "evaluation": "111-甲"}, {"name": "臺北市政府社會局委託台北市托嬰協會經營管理臺北市百齡社區公共托育家園", "district": "士林區", "address": "臺北市士林區福港街205號1樓(百齡國小內)", "phone": "(02)28815205", "approved": "12", "current": "12", "evaluation": "111-甲"}, {"name": "臺北市政府社會局委託財團法人中華民國唐氏症基金會經營管理臺北市三玉社區公共托育家園", "district": "士林區", "address": "臺北市士林區天母東路116號2樓(三玉國小內)", "phone": "(02)28745376", "approved": "12", "current": "12", "evaluation": "111-甲"}, {"name": "臺北市政府社會局委託新北市嬰幼兒托育發展促進會經營管理臺北市蘭雅社區公共托育家園", "district": "士林區", "address": "臺北市士林區磺溪街57號(蘭雅國小內)", "phone": "(02)28384896", "approved": "12", "current": "12", "evaluation": "111-甲"}, {"name": "臺北市政府社會局委託社團法人台灣公共托育協會經營管理臺北市文昌社區公共托育家園", "district": "士林區", "address": "臺北市士林區文林路615巷20號1樓(文昌國小內)", "phone": "(02)28318272", "approved": "12", "current": "12", "evaluation": "109-優"}, {"name": "臺北市政府社會局委託社團法人台灣公共托育協會經營管理臺北市士林社區公共托育家園", "district": "士林區", "address": "臺北市士林區大東路165號1樓(士林國小育才樓)", "phone": "(02)28833701", "approved": "12", "current": "12", "evaluation": "109-甲"}, {"name": "臺北市私立芳馨園二館托嬰中心", "district": "北投區", "address": "臺北市北投區大興街23巷35號1樓", "phone": "(02)28981491", "approved": "24", "current": "23", "evaluation": "110-甲"}, {"name": "臺北市私立安格托嬰中心", "district": "北投區", "address": "臺北市北投區石牌路2段90巷17號2樓", "phone": "(02)28237932", "approved": "34", "current": "34", "evaluation": "111-乙"}, {"name": "臺北市私立向暘托嬰中心", "district": "北投區", "address": "臺北市北投區石牌路2段352號1樓", "phone": "(02)28722873", "approved": "34", "current": "34", "evaluation": "111-甲"}, {"name": "臺北市私立幼輝托嬰中心", "district": "北投區", "address": "臺北市北投區明德路118巷17號1樓", "phone": "(02)28232405", "approved": "22", "current": "17", "evaluation": "109-甲"}, {"name": "臺北市私立可瑞荳托嬰中心", "district": "北投區", "address": "臺北市北投區大業路506之1號1樓", "phone": "(02)28932886", "approved": "22", "current": "22", "evaluation": "109-優"}, {"name": "臺北市私立芳馨園托嬰中心", "district": "北投區", "address": "臺北市北投區中央北路2段227號1樓", "phone": "(02)28986662", "approved": "20", "current": "19", "evaluation": "111-甲"}, {"name": "臺北市私立貝兒托嬰中心", "district": "北投區", "address": "臺北市北投區吉利街158號1樓及2樓", "phone": "(02)28280818", "approved": "38", "current": "35", "evaluation": "110-優"}, {"name": "臺北市私立小腳ㄚ托嬰中心", "district": "北投區", "address": "臺北市北投區吉利街162號1樓", "phone": "(02)28272659", "approved": "20", "current": "19", "evaluation": "111-甲"}, {"name": "臺北市私立小腳ㄚ大未來托嬰中心", "district": "北投區", "address": "臺北巿北投區吉利街207號", "phone": "(02)28216575", "approved": "22", "current": "20", "evaluation": "111-甲"}, {"name": "臺北市私立樂葳兒托嬰中心", "district": "北投區", "address": "臺北市北投區文林北路112號1樓", "phone": "(02)28282525", "approved": "49", "current": "30", "evaluation": "110-甲"}, {"name": "臺北市私立天華托嬰中心", "district": "北投區", "address": "臺北市北投區光明路167號2樓", "phone": "(02)28942666", "approved": "63", "current": "49", "evaluation": "110-甲"}, {"name": "臺北市私立天華石牌托嬰中心", "district": "北投區", "address": "臺北巿北投區榮華三路25號2樓", "phone": "(02)28212653", "approved": "39", "current": "25", "evaluation": ""}, {"name": "臺北市政府社會局委託台北市教保人員協會經營管理臺北市北投托嬰中心", "district": "北投區", "address": "臺北市北投區光明路22號2樓", "phone": "(02)28973848", "approved": "40", "current": "40", "evaluation": "109-優"}, {"name": "臺北市政府社會局委託馬偕醫護管理專科學校經營管理臺北市關渡托嬰中心", "district": "北投區", "address": "臺北市北投區知行路212號2樓(關渡國中內)", "phone": "(02)28581758", "approved": "40", "current": "40", "evaluation": "108-甲"}, {"name": "臺北市政府社會局委託社團法人中華婦幼健康促進發展協會經營管理臺北市奇岩托嬰中心", "district": "北投區", "address": "臺北市北投區磺港路273號1樓", "phone": "(02)28982327", "approved": "45", "current": "45", "evaluation": ""}, {"name": "臺北市政府社會局委託財團法人彭婉如文教基金會經營管理臺北市北投社區公共托育家園", "district": "北投區", "address": "臺北市北投區中央北路1段73號2樓(北投國小白宮)", "phone": "(02)28962977", "approved": "12", "current": "12", "evaluation": "111-甲"}, {"name": "臺北市政府社會局委託財團法人彭婉如文教基金會經營管理臺北市桃源社區公共托育家園", "district": "北投區", "address": "臺北市北投區中央北路3段40巷45號1樓(桃源國小)", "phone": "(02)28931077", "approved": "12", "current": "12", "evaluation": "111-優"}, {"name": "臺北市政府社會局委託臺北市嬰幼兒托育協會經營管理臺北市文北社區公共托育家園", "district": "北投區", "address": "臺北市北投區文林北路75巷61號1樓", "phone": "(02)28280362", "approved": "12", "current": "12", "evaluation": "109-甲"}, {"name": "臺北市政府社會局委託臺北市嬰幼兒托育協會經營管理臺北市洲美社區公共托育家園", "district": "北投區", "address": "臺北市北投區福美路221號1樓", "phone": "(02)28280372", "approved": "12", "current": "12", "evaluation": "109-優"}, {"name": "臺北市政府社會局委託臺北市嬰幼兒托育協會經營管理臺北市稻香社區公共托育家園", "district": "北投區", "address": "臺北市北投區稻香路83號", "phone": "(02)28988036", "approved": "12", "current": "12", "evaluation": ""}, {"name": "臺北市私立快樂托嬰中心", "district": "內湖區", "address": "臺北市內湖區民權東路6段282號2樓", "phone": "(02)26321036", "approved": "30", "current": "30", "evaluation": "110-乙"}, {"name": "臺北市私立小小百合蒙特梭利托嬰中心", "district": "內湖區", "address": "臺北市內湖區星雲街36號1樓及夾層樓", "phone": "(02)27938049", "approved": "20", "current": "20", "evaluation": "110-甲"}, {"name": "臺北市私立嘉霙托嬰中心", "district": "內湖區", "address": "臺北市內湖區陽光街150號1樓", "phone": "(02)87972299", "approved": "25", "current": "25", "evaluation": "111-甲"}, {"name": "臺北市私立斑比諾托嬰中心", "district": "內湖區", "address": "臺北市內湖區民權東路6段190號1樓", "phone": "(02)27923235", "approved": "58", "current": "57", "evaluation": "111-甲"}, {"name": "臺北市私立愛德芬托嬰中心", "district": "內湖區", "address": "臺北市內湖區民權東路6段296巷48之3號1樓", "phone": "(02)26338731", "approved": "18", "current": "15", "evaluation": "109-乙"}, {"name": "臺北市私立維多爾托嬰中心", "district": "內湖區", "address": "臺北市內湖區民權東路6段296巷41號及41-1號1樓", "phone": "(02)26346475", "approved": "40", "current": "40", "evaluation": "110-甲"}, {"name": "臺北市私立愛寶貝內湖園托嬰中心", "district": "內湖區", "address": "臺北市內湖區內湖路2段271號及273號1-2樓", "phone": "(02)27962488", "approved": "40", "current": "36", "evaluation": "111-甲"}, {"name": "臺北市私立艾兒嘉托嬰中心", "district": "內湖區", "address": "臺北市內湖區民權東路6段296巷66之2號1樓", "phone": "(02)26310095", "approved": "33", "current": "33", "evaluation": "111-甲"}, {"name": "臺北市私立永寶兒托嬰中心", "district": "內湖區", "address": "臺北市內湖區民權東路6段180巷6號2樓", "phone": "(02)87925533", "approved": "160", "current": "35", "evaluation": "111-乙"}, {"name": "臺北市私立一貳三托嬰中心", "district": "內湖區", "address": "臺北市內湖區金莊路26號1樓", "phone": "(02)27908009", "approved": "33", "current": "33", "evaluation": "111-甲"}, {"name": "臺北市私立青穗國際托嬰中心", "district": "內湖區", "address": "臺北市內湖區東湖路113巷5弄16號1、2樓", "phone": "(02)26339090", "approved": "40", "current": "38", "evaluation": "110-乙"}, {"name": "臺北市私立藝蘭托嬰中心", "district": "內湖區", "address": "臺北市內湖區港墘路84號2樓", "phone": "(02)26279660", "approved": "29", "current": "28", "evaluation": "110-乙"}, {"name": "臺北市私立愛力寶寶托嬰中心", "district": "內湖區", "address": "臺北市內湖區內湖路2段336巷1號及3號1樓", "phone": "(02)27911133", "approved": "38", "current": "24", "evaluation": ""}, {"name": "臺北市私立怡寶內湖科技之星托嬰中心", "district": "內湖區", "address": "臺北市內湖區瑞光路337號2樓", "phone": "(02)27995337", "approved": "69", "current": "57", "evaluation": ""}, {"name": "臺北市私立凱菲林托嬰中心", "district": "內湖區", "address": "臺北市內湖區康寧路3段54之7號2樓", "phone": "(02)26346116", "approved": "23", "current": "11", "evaluation": ""}, {"name": "臺北市私立探險家托嬰中心", "district": "內湖區", "address": "臺北市內湖區康樂街116號2樓、116之1號2樓、116之2號2樓", "phone": "(02)26330519", "approved": "46", "current": "5", "evaluation": ""}, {"name": "臺北市政府社會局委託財團法人中華民國唐氏症基金會經營管理臺北市內湖托嬰中心", "district": "內湖區", "address": "臺北市內湖區內湖路1段659號2樓", "phone": "(02)77097991", "approved": "45", "current": "45", "evaluation": "110-優"}, {"name": "臺北市政府社會局委託社團法人台北市幼兒園協會辦理臺北市大湖托嬰中心", "district": "內湖區", "address": "臺北市內湖區大湖山莊街170號1樓(大湖國小溫馨樓)", "phone": "(02)27943017", "approved": "40", "current": "40", "evaluation": "108-優"}, {"name": "臺北市政府社會局委託社團法人臺北市飛亞特全人福利服務文教發展協會經營管理臺北市西湖托嬰中心", "district": "內湖區", "address": "臺北市內湖區環山路1段25號2樓(西湖國小忠孝樓)", "phone": "(02)87978863", "approved": "40", "current": "40", "evaluation": "109-優"}, {"name": "臺北市政府社會局委託社團法人中華兆陽文教發展協會經營管理臺北市潭美托嬰中心", "district": "內湖區", "address": "臺北市內湖區新明路22號", "phone": "(02)27926383", "approved": "45", "current": "45", "evaluation": ""}, {"name": "臺北市政府社會局委託社團法人臺北市幼托協會經營管理臺北市新湖社區公共托育家園", "district": "內湖區", "address": "臺北市內湖區民權東路6段138號1樓(新湖國小內)", "phone": "(02)27968015", "approved": "12", "current": "12", "evaluation": "111-甲"}, {"name": "臺北市政府社會局委託社團法人中華婦幼健康促進發展協會經營管理臺北市星雲社區公共托育家園", "district": "內湖區", "address": "臺北市內湖區星雲街161巷3號1樓", "phone": "(02)87922462", "approved": "12", "current": "12", "evaluation": "111-優"}, {"name": "臺北市政府社會局委託社團法人中華婦幼健康促進發展協會經營管理臺北市麗山社區公共托育家園", "district": "內湖區", "address": "臺北市內湖區港華街100號1樓(麗山國小四維二大樓)", "phone": "(02)87510725", "approved": "12", "current": "12", "evaluation": "111-優"}, {"name": "臺北市政府社會局委託社團法人臺北市飛亞特全人福利服務文教發展協會經營管理臺北市文湖社區公共托育家園", "district": "內湖區", "address": "臺北市內湖區文湖街15號2樓(文湖國小內)", "phone": "(02)87978861", "approved": "12", "current": "12", "evaluation": "111-優"}, {"name": "臺北市政府社會局委託社團法人中華婦幼健康促進發展協會經營管理臺北市潭美社區公共托育家園", "district": "內湖區", "address": "臺北市內湖區行善路179號3樓(潭美國小行政樓)", "phone": "(02)27936532", "approved": "12", "current": "12", "evaluation": "109-優"}, {"name": "臺北市政府社會局委託社團法人中華婦幼健康促進發展協會經營管理臺北市瑞光社區公共托育家園", "district": "內湖區", "address": "臺北市內湖區瑞光路162號2樓", "phone": "(02)26591991", "approved": "12", "current": "12", "evaluation": "111-甲"}, {"name": "臺北市私立小狀元托嬰中心(原名稱:小斑馬托嬰中心；我們的南港托嬰中心)", "district": "南港區", "address": "臺北市南港區市民大道8段369號2樓之1", "phone": "(02)27885829", "approved": "25", "current": "8", "evaluation": "109-乙"}, {"name": "臺北市私立愛寶貝南港園托嬰中心", "district": "南港區", "address": "臺北市南港區研究院路1段49號及51號1樓", "phone": "(02)26512407", "approved": "40", "current": "40", "evaluation": "110-甲"}, {"name": "臺北市私立荳寶托嬰中心", "district": "南港區", "address": "臺北市南港區興南街50號及52巷1號1樓", "phone": "(02)27835265", "approved": "35", "current": "28", "evaluation": "110-甲"}, {"name": "臺北市私立中研斑比亞托嬰中心(社團法人臺北市兒童暨少年全方位發展協會辦理)", "district": "南港區", "address": "臺北市南港區研究院路2段61巷9號1樓", "phone": "(02)26538812", "approved": "40", "current": "35", "evaluation": ""}, {"name": "臺北市私立愛寶貝南軟園托嬰中心", "district": "南港區", "address": "臺北市南港區南港路1段2巷27號", "phone": "(02)27834082", "approved": "32", "current": "32", "evaluation": ""}, {"name": "臺北市政府社會局委託社團法人新北市國際兒童教育協會辦理臺北市南港托嬰中心", "district": "南港區", "address": "臺北市南港區東新街65號2樓(成德國小四維樓)", "phone": "(02)27856838", "approved": "40", "current": "40", "evaluation": "109-優"}, {"name": "臺北市政府社會局委託社團法人新北市中華國際嬰幼兒發展學會經營管理臺北市舊莊社區公共托育家園", "district": "南港區", "address": "臺北市南港區舊莊街1段100號1樓(舊莊國小忠孝樓)", "phone": "(02)27883976", "approved": "12", "current": "12", "evaluation": "111-甲"}, {"name": "臺北市政府社會局委託社團法人中華婦幼健康促進發展協會經營管理臺北市玉成社區公共托育家園", "district": "南港區", "address": "臺北市南港區向陽路31號1樓(玉成國小和平樓)", "phone": "(02)26530800", "approved": "12", "current": "12", "evaluation": "110-優"}, {"name": "臺北市政府社會局委託社團法人中華兆陽文教發展協會經營管理臺北市東明托嬰中心", "district": "南港區", "address": "臺北市南港區南港路2段60巷17號", "phone": "(02)27853848", "approved": "40", "current": "40", "evaluation": "111-優"}, {"name": "臺北市政府社會局委託社團法人中華兆陽文教發展協會經營管理臺北市小彎社區公共托育家園", "district": "南港區", "address": "臺北市南港區向陽路250號1樓", "phone": "(02)27836583", "approved": "12", "current": "12", "evaluation": ""}, {"name": "臺北市私立育德興隆托嬰中心", "district": "文山區", "address": "臺北市文山區興隆路2段61巷6號2樓", "phone": "(02)29303666", "approved": "50", "current": "50", "evaluation": "111-甲"}, {"name": "臺北市私立芳馨園木柵托嬰中心", "district": "文山區", "address": "臺北市文山區久康街24巷36號1樓及38號1樓", "phone": "(02)29386090", "approved": "32", "current": "31", "evaluation": "111-甲"}, {"name": "臺北市私立幸福家托嬰中心(原名稱:臺北市私立恩予文山托嬰中心)", "district": "文山區", "address": "臺北市文山區新光路1段31巷1號1樓", "phone": "(02)29390678", "approved": "24", "current": "22", "evaluation": "111-乙"}, {"name": "臺北市私立馥葆托嬰中心", "district": "文山區", "address": "臺北市文山區木新路2段161巷24弄2號1至2樓", "phone": "(02)29388800", "approved": "28", "current": "26", "evaluation": "110-乙"}, {"name": "臺北市私立愛兒福托嬰中心", "district": "文山區", "address": "臺北市文山區辛亥路4段252巷8號及8之1號1樓", "phone": "(02)29311099", "approved": "19", "current": "19", "evaluation": "110-甲"}, {"name": "臺北市私立樂娃兒托嬰中心", "district": "文山區", "address": "臺北市文山區羅斯福路6段159巷1弄18號", "phone": "(02)29315288", "approved": "40", "current": "40", "evaluation": "109-甲"}, {"name": "臺北市私立陽光夥伴托嬰中心", "district": "文山區", "address": "臺北市文山區保儀路62之3號1樓及夾層", "phone": "(02)2939-0290", "approved": "28", "current": "28", "evaluation": "110-乙"}, {"name": "臺北市私立樂萌兒托嬰中心", "district": "文山區", "address": "臺北市文山區木新路2段11號1樓及2樓", "phone": "(02)29390569", "approved": "48", "current": "45", "evaluation": "110-甲"}, {"name": "臺北市私立滬江高級中學附設員工子女托嬰中心", "district": "文山區", "address": "臺北市文山區羅斯福路6段336號", "phone": "(02)86631122", "approved": "40", "current": "28", "evaluation": "111-甲"}, {"name": "臺北市私立艾貝兒托嬰中心", "district": "文山區", "address": "臺北市文山區汀州路4段199號1樓", "phone": "(02)29320062", "approved": "40", "current": "37", "evaluation": ""}, {"name": "臺北市私立嘉樂托嬰中心", "district": "文山區", "address": "臺北市文山區辛亥路7段3之1號", "phone": "(02)22360369", "approved": "26", "current": "25", "evaluation": ""}, {"name": "臺北市私立貝格爾樂佩托嬰中心", "district": "文山區", "address": "臺北市文山區一壽街58號1樓", "phone": "(02)29376901", "approved": "30", "current": "25", "evaluation": ""}, {"name": "臺北市政府社會局委託社團法人台北市兒童托育協會經營管理臺北市文山托嬰中心", "district": "文山區", "address": "臺北市文山區木柵路1段177號2樓", "phone": "(02)22361388", "approved": "40", "current": "40", "evaluation": "110-優"}, {"name": "臺北市政府社會局委託中華民國蒙特梭利教師協會辦理臺北市景美托嬰中心", "district": "文山區", "address": "臺北市文山區羅斯福路6段455巷20、22、26、28號1至2樓及景文街106之1號2樓", "phone": "(02)86635692", "approved": "45", "current": "45", "evaluation": "111-優"}, {"name": "臺北市政府社會局委託耕莘健康管理專科學校經營管理臺北市興隆托嬰中心", "district": "文山區", "address": "臺北市文山區興隆路4段105巷49號", "phone": "(02)29374896", "approved": "40", "current": "40", "evaluation": "109-甲"}, {"name": "臺北市政府社會局委託中華民國蒙特梭利學會經營管理臺北市興華社區公共托育家園", "district": "文山區", "address": "臺北市文山區興隆路3段125巷6號2樓(興華國小科學樓)", "phone": "(02)22305993", "approved": "12", "current": "12", "evaluation": "111-甲"}, {"name": "臺北市政府社會局委託社團法人新北市大愛關懷協會經營管理臺北市萬隆社區公共托育家園", "district": "文山區", "address": "臺北市文山區汀州路4段207號1樓", "phone": "(02)29320443", "approved": "12", "current": "12", "evaluation": "111-甲"}, {"name": "臺北市政府社會局委託社團法人台灣真善美幼兒教育協會經營管理臺北市武功社區公共托育家園", "district": "文山區", "address": "臺北市文山區興隆路1段68號(武功國小內)", "phone": "(02)29300388", "approved": "12", "current": "12", "evaluation": "111-甲"}, {"name": "臺北市政府社會局委託耕莘健康管理專科學校經營管理臺北市忠順社區公共托育家園", "district": "文山區", "address": "臺北市文山區興隆路4段109巷30弄6號(老人自費安養中心內)", "phone": "(02)29362221", "approved": "12", "current": "12", "evaluation": "111-優"}, {"name": "臺北市政府社會局委託社團法人台灣真善美幼兒教育協會經營管理臺北市萬芳社區公共托育家園", "district": "文山區", "address": "臺北市文山區萬和街1號1樓(萬芳國小內)", "phone": "(02)22302627", "approved": "12", "current": "12", "evaluation": "111-甲"}, {"name": "臺北市政府社會局委託社團法人新北市大愛關懷協會經營管理臺北市興隆社區公共托育家園", "district": "文山區", "address": "臺北市文山區福興路2號1樓(興隆國小蒼松樓1樓)", "phone": "(02)89315966", "approved": "12", "current": "12", "evaluation": "111-甲"}, {"name": "臺北市政府社會局委託社團法人新北市大愛關懷協會經營管理臺北市萬福社區公共托育家園", "district": "文山區", "address": "臺北市文山區羅斯福路5段170巷32號1樓(萬福國小蒼松樓)", "phone": "(02)29349616", "approved": "12", "current": "12", "evaluation": "111-甲"}, {"name": "臺北市政府社會局委託台北市教保人員協會經營管理臺北市永建社區公共托育家園", "district": "文山區", "address": "臺北市文山區木柵路1段311巷1號1樓(永建國小內)", "phone": "(02)29392022", "approved": "12", "current": "12", "evaluation": "109-甲"}, {"name": "臺北市政府社會局委託社團法人新北市大愛關懷協會經營管理臺北市辛亥社區公共托育家園", "district": "文山區", "address": "臺北市文山區辛亥路4段103號2樓(辛亥國小南棟)", "phone": "(02)86631134", "approved": "12", "current": "12", "evaluation": "109-甲"}, {"name": "臺北市政府社會局委託中華民國蒙特梭利教師協會經營管理臺北市溪口社區公共托育家園", "district": "文山區", "address": "臺北市文山區景福街225號1樓(溪口國小敬業樓)", "phone": "(02)29330337", "approved": "12", "current": "12", "evaluation": "111-甲"}];
 
-const map = L.map('map').setView([25.0330, 121.5654], 12);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+<!-- MarkerCluster JS -->
+<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+
+<script>
+/**
+ * 建議資料格式：data.json（已合併且含座標）
+ * [
+ *  { "id": 1, "name": "...", "district": "...", "address": "...", "phone": "...",
+ *    "approved": "...", "current": "...", "evaluation": "...", "lat": 25.0, "lon": 121.5 }
+ * ]
+ *
+ * 若沒有 data.json，本頁會嘗試把以下兩份 CSV 依序號/ID join：
+ * - 臺北市準公共化托嬰中心.csv：包含機構資訊（序號、機構名稱、行政區、地址、電話、核定/實際、評鑑）
+ * - XY Data.csv：包含座標（id、Response_Address、lat、lng）
+ *
+ * 最後才回退到 data.csv（單一 CSV + 含座標欄位）。
+ */
+
+const DATA_URL_JSON = "./data.json";
+const DATA_URL_CENTERS_CSV = "./臺北市準公共化托嬰中心.csv";
+const DATA_URL_XY_CSV = "./XY Data.csv";
+const DATA_URL_CSV_FALLBACK  = "./data.csv"; // optional fallback
+
+const els = {
+  q: document.getElementById("q"),
+  district: document.getElementById("district"),
+  evaluation: document.getElementById("evaluation"),
+  radius: document.getElementById("radius"),
+  sort: document.getElementById("sort"),
+  locate: document.getElementById("locate"),
+  clearLocate: document.getElementById("clearLocate"),
+  chips: document.getElementById("chips"),
+  list: document.getElementById("list"),
+  status: document.getElementById("status"),
+  download: document.getElementById("download"),
+};
+
+function setStatus(msg) { els.status.textContent = msg || ""; }
+function escapeHtml(s) {
+  return (s ?? "").toString().replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c]));
+}
+function uniq(arr) { return Array.from(new Set(arr.filter(x => (x ?? "").toString().trim() !== ""))); }
+
+function pick(obj, keys, fallback="") {
+  for (const k of keys) {
+    if (obj && Object.prototype.hasOwnProperty.call(obj, k)) {
+      const v = obj[k];
+      if (v !== undefined && v !== null && String(v).trim() !== "") return v;
+    }
+  }
+  return fallback;
+}
+
+function toFloat(x) {
+  const n = parseFloat(String(x ?? "").trim());
+  return Number.isFinite(n) ? n : null;
+}
+
+function toInt(x) {
+  const n = parseInt(String(x ?? "").trim(), 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+// 取得坐標並自動修正（如果 lat 看起來像經度）
+function normalizeLatLon(latRaw, lonRaw) {
+  let lat = toFloat(latRaw);
+  let lon = toFloat(lonRaw);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return { lat: null, lon: null };
+
+  // Taiwan: lat 約 21~26，lon 約 119~123
+  // 若 lat > 90 且 lon < 90，代表兩者顛倒
+  if (Math.abs(lat) > 90 && Math.abs(lon) <= 90) {
+    const tmp = lat; lat = lon; lon = tmp;
+  }
+  return { lat, lon };
+}
+
+function normalizeRecord(r) {
+  // 支援：data.json / data.csv / centers csv rows
+  const id = toInt(pick(r, ["id","ID","序號"], "")) ?? null;
+
+  const name = pick(r, ["name","Name(機構名稱)","機構名稱"], "");
+  const district = pick(r, ["district","District(行政區)","行政區"], "");
+  const address = pick(r, ["address","Address(地址)","地址","Response_Address"], "");
+  const phone = pick(r, ["phone","Phone(電話)","電話"], "");
+  const approved = pick(r, ["approved","ApprovedCapacity(核定收托人數)","核定收托人數"], "");
+  const current = pick(r, ["current","CurrentEnrolled(實際收托人數)","實際收托人數"], "");
+  const evaluation = pick(r, ["evaluation","Evaluation(評鑑結果)","評鑑結果"], "");
+
+  // 常見欄位：lat/lon or Latitude/Longitude or lat/lng
+  const latCandidate = pick(r, ["lat","Lat","Latitude(緯度)","Latitude","緯度","LAT","lng"], "");
+  const lonCandidate = pick(r, ["lon","Lon","Longitude(經度)","Longitude","經度","LON","lng","Longitude"], "");
+
+  let lat = null, lon = null;
+  // 如果同一列有 lat/lon 或 Latitude/Longitude
+  const p1 = normalizeLatLon(pick(r, ["lat","Lat","Latitude","Latitude(緯度)","緯度"], ""), pick(r, ["lon","Lon","Longitude","Longitude(經度)","經度","lng"], ""));
+  if (Number.isFinite(p1.lat) && Number.isFinite(p1.lon)) { lat = p1.lat; lon = p1.lon; }
+
+  return { id, name, district, address, phone, approved, current, evaluation, lat, lon };
+}
+
+async function fetchText(url) {
+  // handle spaces / unicode
+  const res = await fetch(encodeURI(url), { cache: "no-store" });
+  if (!res.ok) throw new Error(`讀取失敗：${url} (${res.status})`);
+  return await res.text();
+}
+
+async function loadCsv(url) {
+  const text = await fetchText(url);
+  const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
+  return parsed.data || [];
+}
+
+async function loadData() {
+  // 1) Try JSON first
+  try {
+    const res = await fetch(DATA_URL_JSON, { cache: "no-store" });
+    if (res.ok) {
+      const raw = await res.json();
+      const data = (Array.isArray(raw) ? raw : []).map(normalizeRecord);
+      return { data, source: "data.json" };
+    }
+  } catch (e) {}
+
+  // 2) Try join: centers + XY Data
+  try {
+    const [centersRaw, xyRaw] = await Promise.all([
+      loadCsv(DATA_URL_CENTERS_CSV),
+      loadCsv(DATA_URL_XY_CSV),
+    ]);
+
+    const xyById = new Map();
+    for (const r of xyRaw) {
+      const id = toInt(pick(r, ["id","ID","序號"], ""));
+      if (!id) continue;
+
+      // XY Data：常見欄位 id / Response_Address / lat / lng
+      const respAddr = pick(r, ["Response_Address","response_address","標準化地址"], "");
+      const a1 = pick(r, ["lat","Lat","Latitude","緯度"], "");
+      const a2 = pick(r, ["lng","lon","Lon","Longitude","經度"], "");
+      const { lat, lon } = normalizeLatLon(a1, a2);
+
+      xyById.set(id, { respAddr, lat, lon });
+    }
+
+    const merged = centersRaw.map(r => {
+      const base = normalizeRecord(r);
+      if (base.id && xyById.has(base.id)) {
+        const xy = xyById.get(base.id);
+        // address 以 Response_Address 優先（你也提到會用它做標準化）
+        if (xy.respAddr) base.address = xy.respAddr;
+
+        // 若 centers 本身沒有座標，就用 XY 的
+        if (!Number.isFinite(base.lat) || !Number.isFinite(base.lon)) {
+          base.lat = xy.lat;
+          base.lon = xy.lon;
+        }
+      }
+      return base;
+    });
+
+    return { data: merged, source: "centers+xy csv" };
+  } catch (e) {
+    // continue
+  }
+
+  // 3) Fallback to single CSV
+  try {
+    const raw = await loadCsv(DATA_URL_CSV_FALLBACK);
+    const data = raw.map(normalizeRecord);
+    return { data, source: "data.csv" };
+  } catch (e) {
+    throw new Error("找不到資料檔：請放 data.json（或 臺北市準公共化托嬰中心.csv + XY Data.csv，或 data.csv）在同一個資料夾。");
+  }
+}
+
+// Map
+const map = L.map("map").setView([25.0330, 121.5654], 12);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
   maxZoom: 19,
-  attribution: '&copy; OpenStreetMap contributors'
+  attribution: "&copy; OpenStreetMap contributors"
 }).addTo(map);
 
-const markers = new Map(); // key -> leaflet marker
-const cacheKey = "taipei_childcare_geocode_cache_v1";
+// Marker layer (cluster)
+const cluster = L.markerClusterGroup();
+map.addLayer(cluster);
 
-function loadCache() {
-  try { return JSON.parse(localStorage.getItem(cacheKey) || "{}"); }
-  catch (e) { return {}; }
-}
-function saveCache(obj) {
-  localStorage.setItem(cacheKey, JSON.stringify(obj));
-}
+// User location marker
+let userLoc = null; // {lat, lon}
+let userMarker = null;
 
-function normAddr(s) {
-  return (s || "").replace(/\s+/g, " ").trim();
-}
+// Keep marker refs so list click can focus/open popup
+const markerByKey = new Map();
 
-async function geocode(address) {
-  const full = "臺北市 " + normAddr(address);
-  const url = "https://nominatim.openstreetmap.org/search?format=json&limit=1&q=" + encodeURIComponent(full);
-  const res = await fetch(url, {
-    headers: { "Accept": "application/json" }
-  });
-  if (!res.ok) throw new Error("地理編碼失敗：" + res.status);
-  const j = await res.json();
-  if (!j || j.length === 0) return null;
-  return { lat: parseFloat(j[0].lat), lon: parseFloat(j[0].lon), display: j[0].display_name };
+function recKey(r) {
+  return `${r.id ?? ""}|${r.name}|${r.address}|${r.lat}|${r.lon}`;
 }
 
-function popupHtml(r, extra="") {
+function gmapsSearchUrl(r) {
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(r.lat + "," + r.lon)}`;
+}
+function gmapsDirUrl(r) {
+  // origin 留空會用當前位置（手機通常更準）
+  return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(r.lat + "," + r.lon)}`;
+}
+
+function popupHtml(r) {
+  const distLine = (userLoc && Number.isFinite(r._distKm))
+    ? `<div style="margin-top:6px;font-size:12px"><b>距離：</b>${r._distKm.toFixed(2)} km</div>` : "";
+
   return `
-    <div style="font-family:system-ui,-apple-system,'Noto Sans TC','PingFang TC','Microsoft JhengHei',sans-serif;line-height:1.5">
+    <div style="font-family:system-ui,-apple-system,'Noto Sans TC','PingFang TC','Microsoft JhengHei',sans-serif;line-height:1.55">
       <div style="font-weight:700;margin-bottom:6px">${escapeHtml(r.name)}</div>
       <div>行政區：${escapeHtml(r.district)}</div>
       <div>地址：${escapeHtml(r.address)}</div>
       <div>電話：${escapeHtml(r.phone)}</div>
       <div>核定/實際收托：${escapeHtml(String(r.approved))} / ${escapeHtml(String(r.current))}</div>
       <div>評鑑：${escapeHtml(r.evaluation)}</div>
-      ${extra ? `<div style="margin-top:6px;color:#475569;font-size:12px">${escapeHtml(extra)}</div>` : ""}
+      ${distLine}
+      <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+        <a href="${gmapsSearchUrl(r)}" target="_blank" rel="noopener">在 Google 地圖開啟</a>
+        <a href="${gmapsDirUrl(r)}" target="_blank" rel="noopener">導航到此</a>
+      </div>
+      <div style="margin-top:6px;color:#64748b;font-size:12px">
+        座標：${r.lat.toFixed(6)}, ${r.lon.toFixed(6)}
+      </div>
     </div>
   `;
 }
 
-function escapeHtml(s) {
-  return (s ?? "").toString().replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
-}
-
-function setStatus(msg) {
-  document.getElementById("status").textContent = msg || "";
-}
-
-function ensureMarker(key, lat, lon, r, extra="") {
-  if (markers.has(key)) {
-    const m = markers.get(key);
-    m.setLatLng([lat, lon]);
-    m.setPopupContent(popupHtml(r, extra));
-    return m;
-  }
-  const m = L.marker([lat, lon]).addTo(map).bindPopup(popupHtml(r, extra));
-  markers.set(key, m);
-  return m;
-}
-
-function keyFor(r) {
-  return `${r.name}|${r.address}`;
-}
-
-async function focusRecord(r) {
-  const key = keyFor(r);
-  const cache = loadCache();
-  const addrKey = normAddr(r.address);
-
-  setStatus("查詢座標中…");
-  try {
-    let loc = cache[addrKey];
-    let extra = "";
-    if (!loc) {
-      const g = await geocode(r.address);
-      if (!g) {
-        setStatus("找不到座標（可能地址格式較特殊）。");
-        return;
-      }
-      loc = { lat: g.lat, lon: g.lon, display: g.display };
-      cache[addrKey] = loc;
-      saveCache(cache);
-      extra = "（新查得座標並已快取）";
-    } else {
-      extra = "（使用快取座標）";
-    }
-    const m = ensureMarker(key, loc.lat, loc.lon, r, loc.display + " " + extra);
-    map.setView([loc.lat, loc.lon], 16, { animate: true });
-    m.openPopup();
-    setStatus("");
-  } catch (e) {
-    console.error(e);
-    setStatus(String(e.message || e));
-  }
-}
-
-function uniq(arr) { return Array.from(new Set(arr)); }
-
-const districtSel = document.getElementById("district");
-const evalSel = document.getElementById("evaluation");
-
-uniq(DATA.map(x => x.district)).sort().forEach(d => {
-  const opt = document.createElement("option");
-  opt.value = d; opt.textContent = d;
-  districtSel.appendChild(opt);
-});
-uniq(DATA.map(x => x.evaluation)).sort().forEach(e => {
-  const opt = document.createElement("option");
-  opt.value = e; opt.textContent = e;
-  evalSel.appendChild(opt);
-});
+let ALL = [];        // all normalized records (may include missing coords)
+let PLOTTABLE = [];  // records with lat/lon
+let FILTERED = [];   // filtered, plottable
 
 function match(r, q, d, e) {
   if (d && r.district !== d) return false;
@@ -184,90 +351,256 @@ function match(r, q, d, e) {
   return t.includes(q.toLowerCase());
 }
 
-function render() {
-  const q = document.getElementById("q").value.trim();
-  const d = districtSel.value;
-  const e = evalSel.value;
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const toRad = x => x * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat/2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon/2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R * c;
+}
 
-  const filtered = DATA.filter(r => match(r, q, d, e));
-  document.getElementById("chips").innerHTML = `
-    <span class="chip">筆數：${filtered.length} / ${DATA.length}</span>
+function withDistance(records) {
+  if (!userLoc) return records.map(r => ({...r, _distKm: null}));
+  return records.map(r => ({...r, _distKm: haversineKm(userLoc.lat, userLoc.lon, r.lat, r.lon)}));
+}
+
+function rebuildMarkers(records) {
+  cluster.clearLayers();
+  markerByKey.clear();
+
+  for (const r of records) {
+    const m = L.marker([r.lat, r.lon]).bindPopup(popupHtml(r));
+    cluster.addLayer(m);
+    markerByKey.set(recKey(r), m);
+  }
+}
+
+function renderList(records) {
+  els.list.innerHTML = "";
+  const limit = 400;
+  const show = records.slice(0, limit);
+
+  for (const r of show) {
+    const div = document.createElement("div");
+    div.className = "row";
+
+    const dist = (userLoc && Number.isFinite(r._distKm))
+      ? `<div class="meta dist">距離：${r._distKm.toFixed(2)} km</div>` : "";
+
+    div.innerHTML = `
+      <div class="name">${escapeHtml(r.name)}</div>
+      <div class="meta">行政區：${escapeHtml(r.district)}｜評鑑：${escapeHtml(r.evaluation)}</div>
+      ${dist}
+      <div class="meta">${escapeHtml(r.address)}</div>
+      <div class="meta">${escapeHtml(r.phone)}</div>
+    `;
+    div.addEventListener("click", () => {
+      const key = recKey(r);
+      const m = markerByKey.get(key);
+      if (m) {
+        map.setView([r.lat, r.lon], 16, { animate: true });
+        m.openPopup();
+      }
+    });
+    els.list.appendChild(div);
+  }
+
+  if (records.length > limit) {
+    const hint = document.createElement("div");
+    hint.className = "hint";
+    hint.style.marginTop = "8px";
+    hint.textContent = `結果超過 ${limit} 筆，清單只顯示前 ${limit} 筆；請再加篩選條件。`;
+    els.list.appendChild(hint);
+  }
+}
+
+function renderChips(totalPlottable, missingCoords, filteredCount) {
+  const q = els.q.value.trim();
+  const d = els.district.value;
+  const e = els.evaluation.value;
+  const radius = els.radius.value;
+
+  const locChip = userLoc ? `<span class="chip">已定位</span>` : "";
+
+  els.chips.innerHTML = `
+    <span class="chip">顯示：${filteredCount} / ${totalPlottable}</span>
+    <span class="chip">無座標：${missingCoords}</span>
+    ${locChip}
+    ${radius ? `<span class="chip">距離：${escapeHtml(radius)} km 內</span>` : ""}
     ${d ? `<span class="chip">行政區：${escapeHtml(d)}</span>` : ""}
     ${e ? `<span class="chip">評鑑：${escapeHtml(e)}</span>` : ""}
     ${q ? `<span class="chip">關鍵字：${escapeHtml(q)}</span>` : ""}
   `;
+}
 
-  const list = document.getElementById("list");
-  list.innerHTML = "";
-  filtered.slice(0, 300).forEach(r => {
-    const div = document.createElement("div");
-    div.className = "row";
-    div.innerHTML = `
-      <div class="title">${escapeHtml(r.name)}</div>
-      <div class="meta">行政區：${escapeHtml(r.district)}｜評鑑：${escapeHtml(r.evaluation)}</div>
-      <div class="meta">${escapeHtml(r.address)}</div>
-      <div class="meta">${escapeHtml(r.phone)}</div>
-    `;
-    div.addEventListener("click", () => focusRecord(r));
-    list.appendChild(div);
-  });
-  if (filtered.length > 300) {
-    const hint = document.createElement("div");
-    hint.className = "small";
-    hint.style.marginTop = "8px";
-    hint.textContent = "結果超過 300 筆，清單只顯示前 300 筆，請再加條件縮小。";
-    list.appendChild(hint);
+function sortRecords(records) {
+  const mode = els.sort.value;
+  const arr = [...records];
+
+  if (mode === "distance" && userLoc) {
+    arr.sort((a,b) => (a._distKm ?? 1e9) - (b._distKm ?? 1e9));
+    return arr;
+  }
+  if (mode === "district") {
+    arr.sort((a,b) => (a.district || "").localeCompare(b.district || "", "zh-Hant") || (a.name || "").localeCompare(b.name || "", "zh-Hant"));
+    return arr;
+  }
+  // default name
+  arr.sort((a,b) => (a.name || "").localeCompare(b.name || "", "zh-Hant"));
+  return arr;
+}
+
+function applyFilters() {
+  const q = els.q.value.trim();
+  const d = els.district.value;
+  const e = els.evaluation.value;
+  const radiusKm = toFloat(els.radius.value);
+
+  let out = PLOTTABLE.filter(r => match(r, q, d, e));
+  out = withDistance(out);
+
+  if (userLoc && Number.isFinite(radiusKm)) {
+    out = out.filter(r => Number.isFinite(r._distKm) && r._distKm <= radiusKm);
+  }
+
+  out = sortRecords(out);
+
+  FILTERED = out;
+  rebuildMarkers(FILTERED);
+  renderList(FILTERED);
+
+  // If only one result, zoom to it
+  if (FILTERED.length === 1) {
+    const r = FILTERED[0];
+    map.setView([r.lat, r.lon], 16, { animate: true });
+    const m = markerByKey.get(recKey(r));
+    if (m) m.openPopup();
+  }
+
+  renderChips(PLOTTABLE.length, ALL.length - PLOTTABLE.length, FILTERED.length);
+}
+
+function fillSelectOptions() {
+  // reset
+  els.district.innerHTML = '<option value="">全部行政區</option>';
+  els.evaluation.innerHTML = '<option value="">全部評鑑</option>';
+
+  const districts = uniq(PLOTTABLE.map(x => x.district)).sort();
+  const evals = uniq(PLOTTABLE.map(x => x.evaluation)).sort();
+
+  for (const d of districts) {
+    const opt = document.createElement("option");
+    opt.value = d; opt.textContent = d;
+    els.district.appendChild(opt);
+  }
+  for (const ev of evals) {
+    const opt = document.createElement("option");
+    opt.value = ev; opt.textContent = ev;
+    els.evaluation.appendChild(opt);
   }
 }
 
-document.getElementById("q").addEventListener("input", render);
-districtSel.addEventListener("change", render);
-evalSel.addEventListener("change", render);
-render();
+function downloadFiltered() {
+  const blob = new Blob([JSON.stringify(FILTERED, null, 2)], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "filtered.json";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
 
-// Optional batch geocoding (throttled 1/sec) for current filtered list
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+function setUserLocation(lat, lon) {
+  userLoc = { lat, lon };
 
-document.getElementById("batch").addEventListener("click", async () => {
-  const q = document.getElementById("q").value.trim();
-  const d = districtSel.value;
-  const e = evalSel.value;
-  const filtered = DATA.filter(r => match(r, q, d, e));
+  if (userMarker) userMarker.remove();
+  userMarker = L.circleMarker([lat, lon], { radius: 8, weight: 2, fillOpacity: 0.25 });
+  userMarker.addTo(map).bindPopup("你目前的位置").openPopup();
 
-  if (filtered.length === 0) return;
+  els.clearLocate.disabled = false;
+  els.sort.querySelector('option[value="distance"]').disabled = false;
+  // 若目前不是 distance，保持；但你可以手動切換
+  applyFilters();
+}
 
-  const btn = document.getElementById("batch");
-  btn.disabled = true;
+function clearUserLocation() {
+  userLoc = null;
+  if (userMarker) { userMarker.remove(); userMarker = null; }
+  els.clearLocate.disabled = true;
+  els.sort.querySelector('option[value="distance"]').disabled = true;
+  if (els.sort.value === "distance") els.sort.value = "name";
+  els.radius.value = "";
+  applyFilters();
+}
 
-  const cache = loadCache();
-  let done = 0, hit = 0, miss = 0;
-
-  for (const r of filtered) {
-    const addrKey = normAddr(r.address);
-    if (cache[addrKey]) {
-      hit++; done++;
-      setStatus(`批次地理編碼：${done}/${filtered.length}（快取命中 ${hit}，新查 ${miss}）`);
-      continue;
-    }
-    try {
-      const g = await geocode(r.address);
-      if (g) {
-        cache[addrKey] = { lat: g.lat, lon: g.lon, display: g.display };
-        miss++;
-      }
-    } catch (e) {
-      // ignore single failure
-    }
-    done++;
-    setStatus(`批次地理編碼：${done}/${filtered.length}（快取命中 ${hit}，新查 ${miss}）`);
-    saveCache(cache);
-    await sleep(1100); // be gentle: ~1 req/sec
+function locateMe() {
+  if (!navigator.geolocation) {
+    alert("瀏覽器不支援定位功能。");
+    return;
   }
+  els.locate.disabled = true;
+  els.locate.textContent = "定位中…";
+  navigator.geolocation.getCurrentPosition(
+    pos => {
+      els.locate.disabled = false;
+      els.locate.textContent = "定位我（附近排序/篩選）";
+      const lat = pos.coords.latitude;
+      const lon = pos.coords.longitude;
+      setUserLocation(lat, lon);
+      map.setView([lat, lon], 14, { animate: true });
+    },
+    err => {
+      els.locate.disabled = false;
+      els.locate.textContent = "定位我（附近排序/篩選）";
+      alert("定位失敗：請確認瀏覽器已允許位置權限。");
+      console.warn(err);
+    },
+    { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
+  );
+}
 
-  saveCache(cache);
-  setStatus(`完成：${done}/${filtered.length}（快取命中 ${hit}，新查 ${miss}）。你現在點選清單項目會更快。`);
-  btn.disabled = false;
-});
+els.q.addEventListener("input", applyFilters);
+els.district.addEventListener("change", applyFilters);
+els.evaluation.addEventListener("change", applyFilters);
+els.radius.addEventListener("change", applyFilters);
+els.sort.addEventListener("change", applyFilters);
+els.download.addEventListener("click", downloadFiltered);
+els.locate.addEventListener("click", locateMe);
+els.clearLocate.addEventListener("click", clearUserLocation);
+
+// Boot
+(async function init() {
+  try {
+    setStatus("讀取資料中…");
+    const { data, source } = await loadData();
+
+    ALL = data;
+    PLOTTABLE = data.filter(r => Number.isFinite(r.lat) && Number.isFinite(r.lon));
+
+    if (PLOTTABLE.length === 0) {
+      setStatus("讀到資料，但沒有可用的緯度/經度（lat/lon）。請確認 CSV/JSON 已有座標。");
+      return;
+    }
+
+    fillSelectOptions();
+    applyFilters();
+
+    // Fit bounds to all points
+    const latlngs = PLOTTABLE.map(r => [r.lat, r.lon]);
+    const bounds = L.latLngBounds(latlngs);
+    map.fitBounds(bounds.pad(0.12));
+
+    setStatus(`完成：載入 ${ALL.length} 筆（可標點 ${PLOTTABLE.length} 筆）。來源：${source}`);
+  } catch (e) {
+    console.error(e);
+    setStatus(String(e.message || e));
+  }
+})();
 </script>
 </body>
 </html>
