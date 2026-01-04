@@ -129,6 +129,7 @@
 const DATA_URL_JSON = "./data.json";
 const DATA_URL_CENTERS_CSV = "./臺北市準公共化托嬰中心.csv";
 const DATA_URL_XY_CSV = "./XY Data.csv";
+const DATA_URL_EVAL_HISTORY_CSV = "./臺北市托嬰中心評鑑結果.csv";
 const DATA_URL_CSV_FALLBACK  = "./data.csv"; // optional fallback
 
 const els = {
@@ -222,6 +223,70 @@ async function loadCsv(url) {
   return parsed.data || [];
 }
 
+// --- 評鑑歷年結果（按需載入） ---
+let evalHistoryCache = null; // { years: string[], byId: Map<number, any>, byName: Map<string, any> }
+
+async function loadEvalHistoryIndex() {
+  if (evalHistoryCache) return evalHistoryCache;
+
+  const rows = await loadCsv(DATA_URL_EVAL_HISTORY_CSV);
+  const years = (rows.length ? Object.keys(rows[0]) : [])
+    .filter(k => /^\d{3}年$/.test(String(k).trim()))
+    .sort((a,b) => a.localeCompare(b, "zh-Hant"));
+
+  const byId = new Map();
+  const byName = new Map();
+  for (const row of rows) {
+    const id = toInt(pick(row, ["編號","序號","id","ID"], ""));
+    if (id) byId.set(id, row);
+    const name = String(pick(row, ["機構名稱","名稱","name"], "") || "").trim();
+    if (name) byName.set(name, row);
+  }
+  evalHistoryCache = { years, byId, byName };
+  return evalHistoryCache;
+}
+
+function buildEvalHistoryHtml(row, years) {
+  const items = [];
+  for (const y of years) {
+    const v = String(row[y] ?? "").trim();
+    if (!v || v.toLowerCase() === "nan") continue;
+    items.push(`<li>${escapeHtml(String(y))}：${escapeHtml(v)}</li>`);
+  }
+  if (!items.length) {
+    return `<div style="margin-top:6px;color:#64748b;font-size:12px">目前沒有歷年評鑑資料</div>`;
+  }
+  return `<ul style="margin:6px 0 0 18px;padding:0">${items.join("")}</ul>`;
+}
+
+async function toggleEvalHistory(r, btn, box) {
+  // Already loaded: just toggle
+  if (box.dataset.loaded === "1") {
+    const shown = box.style.display !== "none";
+    box.style.display = shown ? "none" : "block";
+    btn.textContent = shown ? "查看歷年結果" : "隱藏歷年結果";
+    return;
+  }
+
+  btn.textContent = "載入中…";
+  try {
+    const idx = await loadEvalHistoryIndex();
+    const row = idx.byId.get(r.id) || idx.byName.get(r.name);
+    if (!row) {
+      box.innerHTML = `<div style="margin-top:6px;color:#b91c1c;font-size:12px">查不到歷年評鑑結果（請確認 CSV 內的「編號」與地圖資料序號一致）</div>`;
+    } else {
+      box.innerHTML = buildEvalHistoryHtml(row, idx.years);
+    }
+    box.dataset.loaded = "1";
+    box.style.display = "block";
+    btn.textContent = "隱藏歷年結果";
+  } catch (err) {
+    box.innerHTML = `<div style="margin-top:6px;color:#b91c1c;font-size:12px">讀取「臺北市托嬰中心評鑑結果.csv」失敗：${escapeHtml(String(err?.message || err))}</div>`;
+    box.style.display = "block";
+    btn.textContent = "查看歷年結果";
+  }
+}
+
 async function loadData() {
   // 1) Try JSON first
   try {
@@ -303,6 +368,28 @@ let userMarker = null;
 // Keep marker refs so list click can focus/open popup
 const markerByKey = new Map();
 
+// Hook popup events (attach click handler to "查看歷年結果")
+map.on("popupopen", (ev) => {
+  const root = ev.popup?.getElement?.();
+  const src = ev.popup?._source;
+  const r = src?.__record;
+  if (!root || !r) return;
+
+  const btn = root.querySelector(".js-eval-history");
+  const box = root.querySelector(".js-eval-history-result");
+  if (!btn || !box) return;
+
+  // Avoid double-binding when popup rerenders
+  if (btn.dataset.bound === "1") return;
+  btn.dataset.bound = "1";
+
+  btn.addEventListener("click", (e) => {
+    e.preventDefault();
+    toggleEvalHistory(r, btn, box);
+  });
+});
+
+
 function recKey(r) {
   return `${r.id ?? ""}|${r.name}|${r.address}|${r.lat}|${r.lon}`;
 }
@@ -331,7 +418,9 @@ function popupHtml(r) {
       <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
         <a href="${gmapsSearchUrl(r)}" target="_blank" rel="noopener">在 Google 地圖開啟</a>
         <a href="${gmapsDirUrl(r)}" target="_blank" rel="noopener">導航到此</a>
+        <a href="#" class="js-eval-history" data-id="${String(r.id ?? '')}">查看歷年結果</a>
       </div>
+      <div class="js-eval-history-result" style="margin-top:6px;display:none"></div>
       <div style="margin-top:6px;color:#64748b;font-size:12px">
         座標：${r.lat.toFixed(6)}, ${r.lon.toFixed(6)}
       </div>
@@ -373,6 +462,7 @@ function rebuildMarkers(records) {
 
   for (const r of records) {
     const m = L.marker([r.lat, r.lon]).bindPopup(popupHtml(r));
+    m.__record = r;
     cluster.addLayer(m);
     markerByKey.set(recKey(r), m);
   }
